@@ -1,5 +1,11 @@
 import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+import tensorflow as tf
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+
+import absl.logging
+absl.logging.set_verbosity(absl.logging.ERROR)
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,24 +18,27 @@ import tensorflow as tf
 import random
 import gc
 import keras
+import warnings
+from collections import deque
 
-import logging
-tf.get_logger().setLevel(logging.ERROR)
-from tensorflow.keras.callbacks import Callback
-
-class SilentCallback(Callback):
-    def on_epoch_end(self, epoch, logs=None):
-        pass
+warnings.filterwarnings('ignore')
+# remove all warnings and logs
 
 
-# Rest of your code
+treinar_ia = input("Deseja treinar a IA? (S/N): ")
+if treinar_ia.lower() == "s":
+    treinar_ia = True
+else:
+    treinar_ia = False
+
+
 
 
 env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
 
 class DeepQLearning:
 
-    def __init__(self, env, gamma, epsilon, epsilon_min, epsilon_dec, episodes, batch_size, memory_size, model, max_steps):
+    def __init__(self, env, gamma, epsilon, epsilon_min, epsilon_dec, episodes, batch_size, memory_size, max_steps):
         self.env = env
         self.gamma = gamma
         self.epsilon = epsilon
@@ -39,14 +48,14 @@ class DeepQLearning:
         self.batch_size = batch_size
         self.memory = []  # initialize as empty list
         self.memory_size = memory_size
-        self.model = model
         self.max_steps = max_steps
 
-        # add layers to the model
-        self.model.add(Dense(256, input_shape=env.observation_space.shape, activation='relu'))
-        self.model.add(Dense(256, activation='relu'))
-        self.model.add(Dense(env.action_space.n, activation='linear'))
-        self.model.compile(loss='mse', optimizer=Adam(), metrics=['accuracy'])
+        self.target_model = Sequential()
+        self.target_model.add(Dense(256, input_shape=(210 * 160,), activation='relu'))
+        self.target_model.add(Dense(256, activation='relu'))
+        self.target_model.add(Dense(env.action_space.n, activation='linear'))
+        self.target_model.compile(loss='mse', optimizer=Adam(), metrics=['accuracy'])
+
         
 
         
@@ -59,40 +68,75 @@ class DeepQLearning:
             new_state = np.expand_dims(new_state, axis=0)
 
         self.memory.append([state, action, reward, new_state, done])
+        if len(self.memory) > self.memory_size:
+            del self.memory[0]
 
 
+
+
+    def preprocess_state(self, state):
+        # Remove extra dimension if necessary
+        if state.ndim == 3:
+            state = state.squeeze(axis=0)
+
+        # Flatten the state and normalize the values
+        return state.flatten() / 255.0
 
 
     def select_action(self, state):
+        try:
+            state = self.preprocess_state(state)
+        except TypeError:
+            # print("Error state:", state)
+            return self.env.action_space.sample()
+
         if np.random.random() < self.epsilon:
             return self.env.action_space.sample()
         else:
-            action_index = np.argmax(self.model.predict(state))
-            return self.env.action_space.contains(action_index)
+            if state.ndim == 1:
+                state = np.expand_dims(state, axis=0)
+
+            state = state.astype(np.float32)  # Ensure the data type is float32
+
+            state_tensor = tf.convert_to_tensor(state, dtype=tf.float32)  # Convert state to tensor
+            action_index = np.argmax(self.target_model.predict(state_tensor))
+            action_index = np.clip(action_index, 0, self.env.action_space.n - 1)  # Clip action index to valid range
+            return action_index
+
+
+
+
+
+
 
         
     def replay(self):
         if len(self.memory) < self.batch_size:
             return
 
+        # Sample a random batch of experiences from the memory
         batch = random.sample(self.memory, self.batch_size)
-        states = np.concatenate([i[0] for i in batch], axis=0)
-        new_states = np.concatenate([i[3] for i in batch], axis=0)
-        rewards = np.array([i[2] for i in batch])
-        actions = np.array([i[1] for i in batch])
-        dones = np.array([i[4] for i in batch])
 
-        targets = self.model.predict_on_batch(states)
-        target_values = self.model.predict_on_batch(new_states)
-        max_target_values = np.amax(target_values, axis=1)
+        # Extract states and new_states from the batch
+        states = np.array([self.preprocess_state(exp[0]) for exp in batch])
+        new_states = np.array([self.preprocess_state(exp[3]) for exp in batch])
 
-        for i, action in enumerate(actions):
-            if dones[i]:
-                targets[i, action] = rewards[i]
-            else:
-                targets[i, action] = rewards[i] + self.gamma * max_target_values[i]
+        # Reshape states and new_states to match the expected input shape
+        states = states.reshape(self.batch_size, -1)
+        new_states = new_states.reshape(self.batch_size, -1)
 
-        self.model.fit(states, targets, epochs=1, verbose=0, callbacks=[SilentCallback()])
+        # Predict Q values for the states and new_states
+        q_values = self.target_model.predict_on_batch(states)
+        new_q_values = self.target_model.predict_on_batch(new_states)
+
+        # Create targets for training
+        targets = q_values.copy()
+        for i, (_, action, reward, _, done) in enumerate(batch):
+            targets[i, action] = reward if done else reward + self.gamma * np.max(new_q_values[i])
+
+        # Update the model
+        self.target_model.train_on_batch(states, targets)
+
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_dec
         else:
@@ -108,11 +152,6 @@ class DeepQLearning:
     def train(self):
         scores = []
         for episode in range(self.episodes):
-            if episode % 50 == 0:
-                env = gym.make('ALE/MsPacman-v5', render_mode='human', obs_type="grayscale", frameskip=20)
-            else:
-                env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
-
             state = env.reset()
             state = np.expand_dims(state, axis=0)
             done = False
@@ -131,7 +170,11 @@ class DeepQLearning:
                     break
             scores.append(total)
             mean_score = np.mean(scores[-100:])
-            print('episode: ', episode, 'score: ', total, ' mean score: ', mean_score, 'epsilon: ', self.epsilon)
+            if len(self.memory) > self.memory_size:
+                self.memory.pop(0)
+            if episodes == 1000:
+                self.target_model.save('model')
+            print('episode: ', episode, 'score: ', total, ' mean score: ', mean_score)
 
 
 
@@ -140,24 +183,53 @@ np.random.seed(0)
 print('State space: ', env.observation_space)
 print('Action space: ', env.action_space)
 
-# print(env.observation_space.shape)
-
-# # change to a matrix of env.observation_space.shape[0] x env.observation_space.shape[1]
-# print(env.observation_space)
-
-model = Sequential()
-
 gamma = 0.99
 epsilon = 1.0
 epsilon_min = 0.01
 epsilon_dec = 0.999
 episodes = 1000
-batch_size = 64
-memory = 1000000
+batch_size = 64000000000000
+memory = 10000000000000000000
 max_steps = 1000
 
-dql = DeepQLearning(env, gamma, epsilon, epsilon_min, epsilon_dec, episodes, batch_size, memory, model, max_steps)
+if treinar_ia == True:
+    dql = DeepQLearning(env, gamma, epsilon, epsilon_min, epsilon_dec, episodes, batch_size, memory, max_steps)
 
-dql.train()
+    dql.train()
+else:
+    def preprocess_state(state):
+        state = state[0]  # Extract the 'image' key from the state tuple
+        
+        # Remove extra dimension if necessary
+        if state.ndim == 3:
+            state = state.squeeze(axis=0)
 
-model.save('pacman_model')
+        # Flatten the state and normalize the values
+        return state.flatten() / 255.0
+
+
+    # Test the trained model
+    model = tf.keras.models.load_model('model')
+    for episode in range(10):
+        state = env.reset()
+        done = False
+        total = 0
+        steps = 0
+        while not done:
+            memory = deque(maxlen=10000)
+
+            env.render()
+            state_preprocessed = preprocess_state(state)
+            state_preprocessed = state_preprocessed.reshape(1, -1)
+            action = np.argmax(model.predict(state_preprocessed))
+            next_state, reward, done, _, info = env.step(action)
+            next_state_preprocessed = preprocess_state(next_state)
+            memory.append((state_preprocessed, action, reward, next_state_preprocessed, done))  # This line should now work as expected
+            state = next_state
+
+            if steps > max_steps:
+                break
+        print('episode: ', episode, 'score: ', total)
+    env.close()
+
+
