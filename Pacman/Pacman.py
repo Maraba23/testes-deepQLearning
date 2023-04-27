@@ -1,3 +1,5 @@
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import gymnasium as gym
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,7 +13,19 @@ import random
 import gc
 import keras
 
-env = gym.make('ALE/MsPacman-v5', render_mode='human', obs_type="grayscale")
+import logging
+tf.get_logger().setLevel(logging.ERROR)
+from tensorflow.keras.callbacks import Callback
+
+class SilentCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        pass
+
+
+# Rest of your code
+
+
+env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
 
 class DeepQLearning:
 
@@ -51,25 +65,34 @@ class DeepQLearning:
 
     def select_action(self, state):
         if np.random.random() < self.epsilon:
-            return env.action_space.sample()
+            return self.env.action_space.sample()
         else:
-            return np.argmax(self.model.predict(state))
+            action_index = np.argmax(self.model.predict(state))
+            return self.env.action_space.contains(action_index)
+
         
     def replay(self):
         if len(self.memory) < self.batch_size:
             return
+
         batch = random.sample(self.memory, self.batch_size)
         states = np.concatenate([i[0] for i in batch], axis=0)
-        actions = np.array([i[1] for i in batch])
-        rewards = np.array([i[2] for i in batch])
         new_states = np.concatenate([i[3] for i in batch], axis=0)
+        rewards = np.array([i[2] for i in batch])
+        actions = np.array([i[1] for i in batch])
         dones = np.array([i[4] for i in batch])
 
-        targets = rewards + self.gamma * (np.amax(self.model.predict_on_batch(new_states), axis=1)) * (1 - dones)
-        targets_full = self.model.predict_on_batch(states)
-        ind = np.array([i for i in range(self.batch_size)])
-        targets_full[[ind], [actions]] = targets
-        self.model.fit(states, targets_full, epochs=1, verbose=0)
+        targets = self.model.predict_on_batch(states)
+        target_values = self.model.predict_on_batch(new_states)
+        max_target_values = np.amax(target_values, axis=1)
+
+        for i, action in enumerate(actions):
+            if dones[i]:
+                targets[i, action] = rewards[i]
+            else:
+                targets[i, action] = rewards[i] + self.gamma * max_target_values[i]
+
+        self.model.fit(states, targets, epochs=1, verbose=0, callbacks=[SilentCallback()])
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_dec
         else:
@@ -80,9 +103,16 @@ class DeepQLearning:
 
 
 
+
+
     def train(self):
         scores = []
         for episode in range(self.episodes):
+            if episode % 50 == 0:
+                env = gym.make('ALE/MsPacman-v5', render_mode='human', obs_type="grayscale", frameskip=20)
+            else:
+                env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
+
             state = env.reset()
             state = np.expand_dims(state, axis=0)
             done = False
@@ -102,10 +132,6 @@ class DeepQLearning:
             scores.append(total)
             mean_score = np.mean(scores[-100:])
             print('episode: ', episode, 'score: ', total, ' mean score: ', mean_score, 'epsilon: ', self.epsilon)
-            if mean_score >= 200:
-                print('Ran {} episodes. Solved after {} trials'.format(episode, episode - 100))
-                return
-        print('Did not solve after {} episodes'.format(episode))
 
 
 
