@@ -172,7 +172,7 @@ class DeepQLearning:
             mean_score = np.mean(scores[-100:])
             if len(self.memory) > self.memory_size:
                 self.memory.pop(0)
-            if episodes == 1000:
+            if episodes == 2000:
                 self.target_model.save('model')
             print('episode: ', episode, 'score: ', total, ' mean score: ', mean_score)
 
@@ -187,10 +187,10 @@ gamma = 0.99
 epsilon = 1.0
 epsilon_min = 0.01
 epsilon_dec = 0.999
-episodes = 1000
+episodes = 2000
 batch_size = 64000000000000
 memory = 10000000000000000000
-max_steps = 1000
+max_steps = 4000
 
 if treinar_ia == True:
     dql = DeepQLearning(env, gamma, epsilon, epsilon_min, epsilon_dec, episodes, batch_size, memory, max_steps)
