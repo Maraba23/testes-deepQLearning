@@ -197,6 +197,7 @@ if treinar_ia == True:
 
     dql.train()
 else:
+    env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
     def preprocess_state(state):
         state = state[0]  # Extract the 'image' key from the state tuple
         
@@ -210,26 +211,20 @@ else:
 
     # Test the trained model
     model = tf.keras.models.load_model('model')
-    for episode in range(10):
+    while True:
         state = env.reset()
+        state = preprocess_state(state)
         done = False
         total = 0
-        steps = 0
         while not done:
-            memory = deque(maxlen=10000)
-
             env.render()
-            state_preprocessed = preprocess_state(state)
-            state_preprocessed = state_preprocessed.reshape(1, -1)
-            action = np.argmax(model.predict(state_preprocessed))
-            next_state, reward, done, _, info = env.step(action)
-            next_state_preprocessed = preprocess_state(next_state)
-            memory.append((state_preprocessed, action, reward, next_state_preprocessed, done))  # This line should now work as expected
-            state = next_state
-
-            if steps > max_steps:
-                break
-        print('episode: ', episode, 'score: ', total)
-    env.close()
+            state = np.expand_dims(state, axis=0)
+            action = np.argmax(model.predict(state))
+            new_state, reward, done, _, info = env.step(action)
+            state = new_state
+            total += reward
+        print('score: ', total)
+        env.close()
+        break
 
 
