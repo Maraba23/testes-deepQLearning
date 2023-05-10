@@ -152,7 +152,7 @@ class DeepQLearning:
     def train(self):
         scores = []
         for episode in range(self.episodes):
-            state = env.reset()
+            (state,_) = env.reset()
             state = np.expand_dims(state, axis=0)
             done = False
             total = 0
@@ -172,7 +172,7 @@ class DeepQLearning:
             mean_score = np.mean(scores[-100:])
             if len(self.memory) > self.memory_size:
                 self.memory.pop(0)
-            if episodes == 2000:
+            if episodes == 10000:
                 self.target_model.save('model')
             print('episode: ', episode, 'score: ', total, ' mean score: ', mean_score)
 
@@ -187,7 +187,7 @@ gamma = 0.99
 epsilon = 1.0
 epsilon_min = 0.01
 epsilon_dec = 0.999
-episodes = 2000
+episodes = 10000
 batch_size = 64000000000000
 memory = 10000000000000000000
 max_steps = 4000
@@ -197,18 +197,22 @@ if treinar_ia == True:
 
     dql.train()
 else:
-    env = gym.make('ALE/MsPacman-v5', render_mode='rgb_array', obs_type="grayscale", frameskip=20)
+    env = gym.make('ALE/MsPacman-v5', render_mode='human', obs_type="grayscale", frameskip=20)
     model = tf.keras.models.load_model('model')
-    state = env.reset()
-    state = np.expand_dims(state, axis=0)
+    (state, _) = env.reset()
+    # reshape (210, 160) -> (None, 33600)
+    state = state.reshape(1, -1)
+    #state = np.expand_dims(state, axis=0)
+    # flatten
+    #state = state.flatten()
     done = False
     total = 0
     steps = 0
     while not done:
         steps += 1
-        action = np.argmax(model.predict(state))
+        action = np.argmax(model.predict(state, verbose=0))
         new_state, reward, done, _, info = env.step(action)
-        new_state = np.expand_dims(new_state, axis=0)
+        new_state = new_state.reshape(1, -1)
         total += reward
         state = new_state
         env.render()
